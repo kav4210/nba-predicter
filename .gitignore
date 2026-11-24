@@ -1,0 +1,9 @@
+data/*.csv
+__pycache__/
+.pytest_cache/
+results/test_probs.npz
+*.pyc
+data/modern_games.csv
+models/
+predictions/
+results/modern/test_probs.npz
