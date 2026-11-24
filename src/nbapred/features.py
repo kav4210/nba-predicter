@@ -66,7 +66,7 @@ def build_games(long_feat: pd.DataFrame) -> pd.DataFrame:
     away = pair[pair.fran_id != pair.home_fran]
     assert len(home) == len(away) == long_feat.game_id.nunique(), "each game needs exactly one home and one away row"
 
-    cols = TEAM_FEATS + ["elo"]
+    cols = TEAM_FEATS + ["elo"] + [c for c in long_feat.columns if c.startswith("st_")]
     h = home.set_index("game_id")
     a = away.set_index("game_id").loc[h.index]
     g = pd.DataFrame(index=h.index)

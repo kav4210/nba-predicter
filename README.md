@@ -1,6 +1,6 @@
 # NBA Game Predictor (PyTorch + scikit-learn)
 
-Predict the probability that the home team wins an NBA regular-season game, using only information available before tipoff. Built to answer a specific question: **do neural networks beat a plain Elo rating system on this problem?** Short answer: not meaningfully, and the project is set up to show that honestly.
+Predict the probability that the home team wins an NBA regular-season game, using only information available before tipoff. Built to answer a specific question: **do neural networks beat a plain Elo rating system on this problem?** Short answer: not meaningfully, and the project is set up to show that honestly. It was then extended with unsupervised team-style clustering, a causal back-to-back analysis, a transformer encoder, and a walk-forward evaluation (see "Extensions" below).
 
 Research data: [FiveThirtyEight NBA Elo dataset](https://github.com/fivethirtyeight/data/tree/master/nba-elo), 1946 to 2015, downloaded automatically. Regular season, NBA only: 55k games after dropping each team's first 10 games.
 
@@ -29,6 +29,9 @@ pip install -r requirements.txt
 pytest -q tests                                       # leakage tests (about 2 seconds)
 python scripts/run_experiment.py --seeds 1            # dev run, validation only (about 70 s)
 python scripts/run_experiment.py --seeds 5 --final    # final run, adds test seasons + figures (about 4 min, CPU)
+python scripts/walk_forward.py --seeds 3              # walk-forward 2017 to 2024 (about 14 min, CPU)
+python scripts/style_analysis.py                      # team-style clustering
+python scripts/causal_rest.py                         # back-to-back causal analysis
 ```
 
 ## Design
@@ -91,6 +94,70 @@ Same story as the 1946 to 2015 run, only clearer. Raw Elo assumes home teams win
 
 The deployed predictor averages logistic regression, gradient boosting and the MLP. Note the table's ensemble row is the one I declared before the test run, and it includes the GRU. I dropped the GRU from deployment afterwards because it added machinery without adding accuracy, so the exact three-model average was never scored on the test seasons. Its components are in the table; expect roughly 0.627 to 0.634 log loss.
 
+## Extensions (modern era, 2011 to 2024)
+
+Four additions, each with hypotheses written in the script docstring before the run. All of them mostly returned null results, and the write-up says so.
+
+### Walk-forward evaluation (`scripts/walk_forward.py`)
+
+One fixed split can flatter or punish a model by luck. This refits every model for each test season 2017 to 2024 (train through s-2, validate on s-1, test on s), 3 seeds for the NNs, 9,519 test games pooled. Paired bootstrap CIs on log loss.
+
+| Model | Log loss | Accuracy | ECE | vs own Elo (95% CI) |
+|---|---|---|---|---|
+| transformer (Elo) | 0.6257 | 64.7% | 0.017 | -0.0100 [-0.0131, -0.0070] |
+| Ensemble3 (logreg + hist_gb + mlp, Elo) | 0.6258 | 64.6% | 0.018 | -0.0099 [-0.0126, -0.0072] |
+| logreg (Elo) | 0.6262 | 64.8% | 0.022 | -0.0095 [-0.0121, -0.0069] |
+| logreg (Elo + style) | 0.6264 | 64.3% | 0.024 | -0.0093 [-0.0124, -0.0062] |
+| GRU (Elo) | 0.6267 | 64.7% | 0.014 | -0.0090 [-0.0123, -0.0058] |
+| mlp (Elo) | 0.6268 | 64.6% | 0.012 | -0.0089 [-0.0124, -0.0054] |
+| Control: logreg on Elo gap + home rate | 0.6286 | 64.3% | 0.024 | -0.0071 [-0.0089, -0.0053] |
+| hist_gb (Elo + style) | 0.6287 | 64.4% | 0.017 | -0.0070 [-0.0099, -0.0040] |
+| hist_gb (Elo) | 0.6293 | 64.5% | 0.021 | -0.0064 [-0.0091, -0.0038] |
+| Own Elo forecast | 0.6357 | 64.3% | 0.057 | reference |
+
+Hypotheses, as declared, and what happened:
+
+- **H1: style features add nothing.** Confirmed. Logreg with vs without style: +0.0002 [-0.0009, +0.0012]. MLP and gradient boosting also straddle zero.
+- **H2: transformer ~ GRU ~ logistic regression.** Confirmed. Transformer vs GRU -0.0010 [-0.0022, +0.0003]; transformer vs logreg -0.0005 [-0.0022, +0.0011]. The transformer has the best point estimate and it is noise.
+- **H3: the ensemble beats the control but not logistic regression.** Confirmed. Ensemble3 vs control -0.0028 [-0.0046, -0.0010]; vs logreg -0.0004 [-0.0015, +0.0007].
+
+Net: re-fitting home-court advantage is worth about 0.0071 of the roughly 0.0100 total gain over raw Elo. The rest is real but small, and no architecture is distinguishable from logistic regression on 9.5k games.
+
+![per-season edge](results/walk_forward/fig_wf_by_season.png)
+
+### Transformer encoder (`TransNet` in `src/nbapred/models.py`)
+
+Written from scratch: pre-norm blocks, a [CLS] token, learned positional embeddings over each team's last 10 games, shared encoder for home and away, fused with tabular features. Attention weights are extractable (`cls_attention`). The attention plot is nearly flat, rising only slightly toward older games (0.088 for the most recent game, 0.098 for the 10th back). Do not read that as "the model finds old games more informative." Flat attention here means the model has not learned a sharp recency pattern, which fits the result that Elo already summarizes the sequence.
+
+### Unsupervised team styles (`scripts/style_analysis.py`, `src/nbapred/style.py`)
+
+Nine per-game style rates (pace, three rate, free-throw rate, turnovers, rebounding, assists, steals, blocks), z-scored within season so league-wide drift (league three-point rate went from 0.22 in 2011 to 0.40 in 2024) does not become the clusters. PCA and KMeans/GMM on 420 team-seasons.
+
+Honest result: **there are no real archetypes.** Silhouette is about 0.11 at k=3 versus a shuffled-column null of 0.08, BIC does not favor any k above 2, and cluster win rates (0.512, 0.500, 0.484) are not different (ANOVA p = 0.31). Held-out stability is moderate (ARI 0.78 +/- 0.11), which means the continuous axes are stable but the cut points are arbitrary. Styles are better described as a continuum than as clusters. Trailing style features (20-game window, shifted by one game, PCA fit on training rows only) did not improve any model (H1).
+
+### Causal back-to-back effect (`scripts/causal_rest.py`, `src/nbapred/causal.py`)
+
+Question: how much does playing on zero days of rest cost a team? Naive comparison is confounded: back-to-backs skew toward road games and tougher schedules. Estimators: naive, OLS adjustment, Hajek IPW, and AIPW (doubly robust), with propensity on team Elo, opponent Elo, home, opponent rest, and season progress. 31,943 team-games, 6,702 treated. Game-clustered bootstrap CIs (200 reps).
+
+| Outcome | Naive | OLS | IPW | AIPW |
+|---|---|---|---|---|
+| Point margin | -2.49 | -2.01 | -1.99 | -1.98 [-2.37, -1.60] |
+| Win probability | -7.2 pp | -5.7 pp | -5.6 pp | -5.6 pp [-6.8, -4.2] |
+
+Covariate balance after weighting is good (all standardized mean differences under 0.02; the largest before weighting was home at -0.35). Estimates agree across methods, which is reassuring but not proof.
+
+Caveats you should not skip:
+
+- **The placebo is not clean.** Treating a team's *next* game's back-to-back status as the "treatment" should give zero. It gives -0.27 to -0.56 points (win rate about -1 to -2 pp), CIs mostly touching zero but not centered on it. That suggests residual confounding from scheduling, so the true effect is probably somewhat smaller than 2 points.
+- **E-value 1.49** (CI bound 1.40). An unmeasured confounder associated with both treatment and outcome by a risk ratio of about 1.5 could explain the effect away. That is a modest bar.
+- The effect is real in sign and plausible in size, but treat it as "roughly 1.5 to 2 points" not "-1.98."
+
+![causal forest](results/causal/fig_causal_forest.png)
+
+### Learning material
+
+`LEARN.md` has concept cards and 12 teach-back questions. `exercises/` has five stubs (Elo update, IPW, attention, temperature scaling, find-the-leak) with tests that skip until you implement them. `ex5_find_the_leak.py` fails on purpose until you fix the planted leak. Run `pytest exercises -q`.
+
 ## What the results actually say (1946 to 2015 run)
 
 1. **The ensemble beats 538's forecast, and the gap is real** (CI excludes zero). But it is small: 0.0043 log loss, about 0.7 points of accuracy.
@@ -108,7 +175,8 @@ Process note: the test seasons were evaluated twice. The second run added only t
 
 ## Limitations
 
-- Data ends in 2015. The modern three-point era is not covered.
+- The 1946 to 2015 run does not cover the three-point era; the modern run (2011 to 2024) does, but its data ends April 2024 until you run `update_data.py`.
+- The causal estimate is observational. The placebo test is not clean, so treat -2 points as an upper-end estimate.
 - No betting odds. This predicts probabilities; it does not show an edge over a sportsbook, and nothing here says it would be profitable. Closing lines are the real benchmark and are far harder to beat than 538's Elo.
 - No player-level data (injuries, lineups, rest of key players), which is where most real signal lives.
 - The test set has 4,679 games, so differences under about 0.003 log loss are not detectable.
@@ -116,17 +184,18 @@ Process note: the test seasons were evaluated twice. The second run added only t
 ## Next steps worth doing
 
 - Replace the benchmark with real closing lines (the market is the bar, not Elo).
-- Add player availability features, then see if the GRU or an attention model finally earns its keep.
-- Walk-forward retraining by season instead of one fixed split.
+- Add player availability features, then see if the GRU or transformer finally earns its keep. On results-only inputs, neither does.
 
 ## Layout
 
 ```
-src/nbapred/   data.py, modern.py, elo.py, features.py, models.py, train.py, predict.py, metrics.py
+src/nbapred/   data.py, modern.py, elo.py, features.py, models.py, train.py, predict.py, metrics.py,
+               style.py, causal.py
 scripts/       run_experiment.py (--source 538|modern), train_production.py, update_data.py,
-               predict_slate.py, make_figures.py
-tests/         test_no_leakage.py, test_predict_path.py
-results/       1946-2015 run + results/modern/ (json + figures)
+               predict_slate.py, make_figures.py, walk_forward.py, style_analysis.py, causal_rest.py
+tests/         test_no_leakage.py, test_predict_path.py, test_style.py, test_causal.py, test_models.py
+exercises/     5 implement-it-yourself stubs + tests (see LEARN.md)
+results/       1946-2015 run, results/modern/, results/walk_forward/, results/style/, results/causal/
 ```
 
 `tests/test_predict_path.py` proves the slate path (results unknown) produces exactly the features the backtest path would have, so what the model is scored on is what it sees in use. I confirmed it fails when I inject an Elo leak.

@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from nbapred import modern  # noqa: E402
 
-NEEDED = ["TEAM_ID", "TEAM_ABBREVIATION", "GAME_ID", "GAME_DATE", "MATCHUP", "WL", "PTS", "PLUS_MINUS"]
+NEEDED = ["TEAM_ID", "TEAM_ABBREVIATION", "GAME_ID", "GAME_DATE", "MATCHUP", "WL", "PTS", "PLUS_MINUS", *modern.BOX]
 
 
 def season_string(end_year: int) -> str:
@@ -37,7 +37,7 @@ def normalize(df: pd.DataFrame, season: str) -> pd.DataFrame:
     out["SEASON_YEAR"] = season
     out["GAME_ID"] = out["GAME_ID"].astype(str)
     out["GAME_DATE"] = pd.to_datetime(out["GAME_DATE"]).dt.strftime("%Y-%m-%dT00:00:00")
-    return out[modern.KEEP]
+    return out[modern.ALL]
 
 
 def fetch_season(season: str, retries: int = 3) -> pd.DataFrame:

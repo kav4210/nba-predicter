@@ -93,13 +93,14 @@ def test_update_data_normalizes_nba_api_frame_and_drops_unfinished_games():
         "GAME_ID": ["0022600001", "0022600001", "0022600002", "0022600002"],
         "GAME_DATE": ["2026-10-22"] * 4, "MATCHUP": ["BOS vs. LAL", "LAL @ BOS", "NYK vs. MIA", "MIA @ NYK"],
         "WL": ["W", "L", None, None], "PTS": [110, 100, 0, 0], "PLUS_MINUS": [10.0, -10.0, 0.0, 0.0],
+        **{c: [1.0, 1.0, 0.0, 0.0] for c in modern.BOX},
     })
     out = upd.normalize(df, "2026-27")
-    assert len(out) == 2 and list(out.columns) == modern.KEEP
+    assert len(out) == 2 and list(out.columns) == modern.ALL
     g = modern.games_from_team_rows(out)
     assert len(g) == 1 and g.iloc[0].home_abbr == "BOS" and g.iloc[0].home_pts == 110 and g.iloc[0].away_pts == 100
     with pytest.raises(ValueError, match="missing columns"):
-        upd.normalize(df.drop(columns=["PLUS_MINUS"]), "2026-27")
+        upd.normalize(df.drop(columns=["PLUS_MINUS", "FGA"]), "2026-27")
 
 
 def test_schedule_parser_keeps_only_regular_season_games_on_the_date():

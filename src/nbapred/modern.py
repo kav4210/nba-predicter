@@ -1,9 +1,9 @@
 """Modern-era data: nba_api / stats.nba.com team game logs -> the schema the feature code expects.
 
 Input rows (one per team per game) need: SEASON_YEAR, TEAM_ID, TEAM_ABBREVIATION, GAME_ID,
-GAME_DATE, MATCHUP ('BOS vs. LAL' = BOS home, 'BOS @ LAL' = BOS away), WL, PTS, PLUS_MINUS.
-That is what nba_api's LeagueGameLog (team mode) returns, and what the public
-NocturneBear/NBA-Data-2010-2024 totals file contains.
+GAME_DATE, MATCHUP ('BOS vs. LAL' = BOS home, 'BOS @ LAL' = BOS away), WL, PTS, PLUS_MINUS,
+plus the team box score columns in BOX. That is what nba_api's LeagueGameLog (team mode)
+returns, and what the public NocturneBear/NBA-Data-2010-2024 totals file contains.
 """
 from __future__ import annotations
 
@@ -18,20 +18,28 @@ from .elo import expected, run_elo
 URL = "https://raw.githubusercontent.com/NocturneBear/NBA-Data-2010-2024/main/regular_season_totals_2010_2024.csv"
 DEFAULT_PATH = Path(__file__).resolve().parents[2] / "data" / "modern_games.csv"
 KEEP = ["SEASON_YEAR", "TEAM_ID", "TEAM_ABBREVIATION", "GAME_ID", "GAME_DATE", "MATCHUP", "WL", "PTS", "PLUS_MINUS"]
+BOX = ["FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "OREB", "DREB", "AST", "STL", "BLK", "TOV", "PF"]
+ALL = KEEP + BOX
+
+
+def _has_box(path: Path) -> bool:
+    return set(BOX) <= set(pd.read_csv(path, nrows=0).columns)
 
 
 def download_history(path: Path = DEFAULT_PATH) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not _has_box(path):
+        path.unlink()  # old cache without box scores: rebuild from the public history
     if not path.exists():
         tmp = path.with_suffix(".tmp")
         urllib.request.urlretrieve(URL, tmp)
-        pd.read_csv(tmp, usecols=KEEP).to_csv(path, index=False)
+        pd.read_csv(tmp, usecols=ALL).to_csv(path, index=False)
         tmp.unlink()
     return path
 
 
 def load_team_rows(path: Path = DEFAULT_PATH) -> pd.DataFrame:
-    return pd.read_csv(download_history(Path(path)), usecols=KEEP, dtype={"GAME_ID": str})
+    return pd.read_csv(download_history(Path(path)), usecols=ALL, dtype={"GAME_ID": str})
 
 
 def season_end_year(dates: pd.Series) -> pd.Series:
@@ -40,12 +48,13 @@ def season_end_year(dates: pd.Series) -> pd.Series:
 
 
 def games_from_team_rows(rows: pd.DataFrame) -> pd.DataFrame:
-    """One row per completed game, home vs away."""
+    """One row per completed game, home vs away, carrying both teams' box scores."""
     d = rows.dropna(subset=["WL"]).copy()
     d["date"] = pd.to_datetime(d["GAME_DATE"]).dt.normalize()
     d["opp_pts"] = d["PTS"] - d["PLUS_MINUS"]
     is_home = d["MATCHUP"].str.contains("vs.", regex=False)
-    cols = {"TEAM_ID": "id", "TEAM_ABBREVIATION": "abbr", "PTS": "pts", "opp_pts": "opp"}
+    box = [c for c in BOX if c in d.columns]
+    cols = {"TEAM_ID": "id", "TEAM_ABBREVIATION": "abbr", "PTS": "pts", "opp_pts": "opp", **{c: c for c in box}}
     h = d[is_home][["GAME_ID", "date", *cols]].rename(columns=cols)
     a = d[~is_home][["GAME_ID", *cols]].rename(columns=cols)
     g = h.merge(a, on="GAME_ID", suffixes=("_h", "_a"))
@@ -55,6 +64,9 @@ def games_from_team_rows(rows: pd.DataFrame) -> pd.DataFrame:
         "home_abbr": g["abbr_h"], "away_abbr": g["abbr_a"],
         "home_pts": g["pts_h"].astype(float), "away_pts": g["pts_a"].astype(float),
     })
+    for c in box:
+        out[f"h_{c}"] = g[f"{c}_h"].astype(float)
+        out[f"a_{c}"] = g[f"{c}_a"].astype(float)
     out["year_id"] = season_end_year(out["date"])
     out["is_upcoming"] = False
     return out.sort_values(["date", "game_id"]).reset_index(drop=True)
@@ -90,7 +102,8 @@ def to_long(games: pd.DataFrame) -> pd.DataFrame:
     Elo is computed here, in order, so `elo_i` is always pre-game. Upcoming games get placeholder
     scores (100-100, margin 0): features never use a game's own result (tests/test_no_leakage.py),
     so the placeholder cannot affect that game's features, and each team may appear only once in
-    the upcoming slate.
+    the upcoming slate. Box scores of upcoming games stay NaN for the same reason.
+    Box columns are exposed as box_* (the team's own) and obox_* (the opponent's).
     """
     g = games.sort_values(["date", "is_upcoming", "game_id"]).reset_index(drop=True)
     margin = (g["home_pts"] - g["away_pts"]).to_numpy(dtype=float)
@@ -100,11 +113,12 @@ def to_long(games: pd.DataFrame) -> pd.DataFrame:
     hp = np.where(up, 100.0, g["home_pts"])
     ap = np.where(up, 100.0, g["away_pts"])
     date_str = g["date"].dt.strftime("%m/%d/%Y")
+    box = [c for c in BOX if f"h_{c}" in g.columns]
 
     def side(home: bool) -> pd.DataFrame:
         t, o = ("home", "away") if home else ("away", "home")
         won = (hp > ap) if home else (ap > hp)
-        return pd.DataFrame({
+        df = pd.DataFrame({
             "gameorder": np.arange(1, len(g) + 1), "game_id": g["game_id"], "lg_id": "NBA",
             "_iscopy": 0 if home else 1, "year_id": g["year_id"], "date_game": date_str,
             "is_playoffs": 0, "team_id": g[f"{t}_abbr"], "fran_id": g[f"{t}_id"].astype(str),
@@ -113,5 +127,9 @@ def to_long(games: pd.DataFrame) -> pd.DataFrame:
             "game_location": "H" if home else "A", "game_result": np.where(won, "W", "L"),
             "forecast": p_home if home else 1 - p_home, "is_upcoming": up,
         })
+        for c in box:
+            df[f"box_{c}"] = g[f"{t[0]}_{c}"].to_numpy()
+            df[f"obox_{c}"] = g[f"{o[0]}_{c}"].to_numpy()
+        return df
 
     return pd.concat([side(True), side(False)], ignore_index=True)
