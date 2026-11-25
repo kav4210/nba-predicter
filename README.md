@@ -20,7 +20,7 @@ The public history file ends April 2024, so `update_data.py` is required before 
 
 What to expect: about **64% of winners picked correctly** on held-out 2023 and 2024 games (always picking the home team gets 56%). That is the honest ceiling for a model that only sees results. It does not know about injuries, rest of specific players, or lineups, and it will lose to betting lines. Treat the output as a calibrated probability, not a lock.
 
-Not tested live: `update_data.py` and the schedule fetch need access to the NBA's servers, which were blocked in the environment this was built in. Their parsing logic is unit-tested on synthetic payloads in the documented shape, but the first run on your machine is the real test. If the schedule JSON ever changes shape, use `--games`.
+Tested live on 2026-11-24: `update_data.py` pulled results through 2026-11-23 and `train_production.py` ran. The CDN schedule URL returned 403, so `predict_slate.py` now falls back to the `nba_api` scoreboard (the fallback was run live; the CDN path still has only synthetic-payload tests). If both fail, use `--games`.
 
 ## Setup
 

@@ -39,9 +39,23 @@ def parse_schedule(payload: dict, date: pd.Timestamp) -> list[tuple[str, str]]:
     return out
 
 
+def fetch_via_nba_api(date: pd.Timestamp) -> list[tuple[str, str]]:
+    """Fallback: the CDN schedule returned 403 on a home machine; the stats API (same one update_data uses) worked."""
+    from nba_api.stats.endpoints import scoreboardv2
+    from nba_api.stats.static import teams
+    ab = {t["id"]: t["abbreviation"] for t in teams.get_teams()}
+    d = scoreboardv2.ScoreboardV2(game_date=f"{date:%Y-%m-%d}", timeout=30).get_data_frames()[0]
+    d = d[d["GAME_ID"].astype(str).str.startswith("002")]  # regular season only
+    return [(ab[r.VISITOR_TEAM_ID], ab[r.HOME_TEAM_ID]) for r in d.itertuples()]
+
+
 def fetch_matchups(date: pd.Timestamp) -> list[tuple[str, str]]:
-    with urllib.request.urlopen(SCHEDULE_URL, timeout=30) as r:
-        return parse_schedule(json.load(r), date)
+    try:
+        with urllib.request.urlopen(SCHEDULE_URL, timeout=30) as r:
+            return parse_schedule(json.load(r), date)
+    except Exception as e:  # 403 from the CDN is the known failure
+        print(f"schedule CDN failed ({e}); falling back to nba_api scoreboard", file=sys.stderr)
+        return fetch_via_nba_api(date)
 
 
 def main():
