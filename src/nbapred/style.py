@@ -17,6 +17,9 @@ from sklearn.preprocessing import StandardScaler
 STYLE_RAW = ["pace", "three_rate", "ft_rate", "tov_rate", "oreb_pct", "dreb_pct", "ast_rate", "efg", "ortg", "drtg"]
 # metrics that describe HOW a team plays, not how good it is; used for archetype clustering
 ARCHETYPE = ["pace", "three_rate", "ft_rate", "tov_rate", "oreb_pct", "dreb_pct", "ast_rate", "stl_rate", "blk_rate"]
+# what a team gives up (the opponent's rates against it) and how it does at its current venue
+ALLOW_RAW = ["allow_efg", "allow_three_rate", "allow_ft_rate", "allow_oreb_pct", "allow_ast_rate", "allow_tov_rate"]
+SPLIT_RAW = ALLOW_RAW + ["venue_margin"]
 ALL_METRICS = sorted(set(STYLE_RAW) | set(ARCHETYPE), key=(STYLE_RAW + ARCHETYPE).index)
 
 
@@ -39,6 +42,12 @@ def game_metrics(long: pd.DataFrame) -> pd.DataFrame:
     m["blk_rate"] = b("BLK") / o("FGA")
     m["ortg"] = 100.0 * long["pts"] / poss
     m["drtg"] = 100.0 * long["opp_pts"] / opp_poss
+    m["allow_efg"] = (o("FGM") + 0.5 * o("FG3M")) / o("FGA")
+    m["allow_three_rate"] = o("FG3A") / o("FGA")
+    m["allow_ft_rate"] = o("FTA") / o("FGA")
+    m["allow_oreb_pct"] = o("OREB") / (o("OREB") + b("DREB"))
+    m["allow_ast_rate"] = o("AST") / o("FGM")
+    m["allow_tov_rate"] = o("TOV") / opp_poss
     return m
 
 
@@ -49,9 +58,12 @@ def add_trailing_style(long_feat: pd.DataFrame, window: int = 20, min_periods: i
     out = long_feat.copy()
     m = game_metrics(out)
     grp = out["fran_id"]
-    for c in STYLE_RAW:
+    for c in STYLE_RAW + ALLOW_RAW:
         out[f"st_{c}"] = m[c].groupby(grp, sort=False).transform(
             lambda s: s.shift(1).rolling(window, min_periods=min_periods).mean())
+    # same-venue form: mean margin over the team's previous 10 games at this venue type (home or road)
+    out["st_venue_margin"] = out["margin"].groupby([grp, out["is_home"]], sort=False).transform(
+        lambda s: s.shift(1).rolling(10, min_periods=5).mean())
     return out
 
 

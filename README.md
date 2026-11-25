@@ -154,6 +154,19 @@ Caveats you should not skip:
 
 ![causal forest](results/causal/fig_causal_forest.png)
 
+### Home/road splits and "what a team gives up" (`scripts/splits_walk_forward.py`)
+
+Added trailing opponent-allowed rates (eFG, 3-point rate, free-throw rate, offensive rebounding, assist rate, turnover rate) and same-venue margin (last 10 home or road games), both shifted one game so a game's own box score never enters its features (the leakage test covers them; removing the shift makes it fail). Same walk-forward setup, 9,519 games, 3 seeds.
+
+Declared before the run: H4, neither feature set helps logreg, gradient boosting or the MLP (deltas under 0.001, CIs straddle zero). H5, gradient boosting gets worse, not better.
+
+| Paired change vs Elo-only features | logreg | hist_gb | mlp |
+|---|---|---|---|
+| + allowed rates | +0.0004 [-0.0008, +0.0015] | -0.0025 [-0.0040, -0.0011] | +0.0023 [+0.0001, +0.0043] |
+| + venue margin | -0.0001 [-0.0005, +0.0003] | -0.0009 [-0.0018, -0.0000] | -0.0001 [-0.0013, +0.0011] |
+
+H4 held for logistic regression and the MLP's venue margin; allowed rates made the MLP slightly worse. **H5 was wrong:** gradient boosting improved by 0.0025 with allowed rates. But that only brings it to 0.6268, still behind plain logistic regression on Elo (0.6262), so the extra columns repair the weakest model without beating the best one. Nine comparisons were run, so one CI barely excluding zero is weak evidence. Net: Elo already carries what these features describe. The best model is still logistic regression on Elo features.
+
 ### Learning material
 
 `LEARN.md` has concept cards and 12 teach-back questions. `exercises/` has five stubs (Elo update, IPW, attention, temperature scaling, find-the-leak) with tests that skip until you implement them. `ex5_find_the_leak.py` fails on purpose until you fix the planted leak. Run `pytest exercises -q`.
@@ -192,7 +205,7 @@ Process note: the test seasons were evaluated twice. The second run added only t
 src/nbapred/   data.py, modern.py, elo.py, features.py, models.py, train.py, predict.py, metrics.py,
                style.py, causal.py
 scripts/       run_experiment.py (--source 538|modern), train_production.py, update_data.py,
-               predict_slate.py, make_figures.py, walk_forward.py, style_analysis.py, causal_rest.py
+               predict_slate.py, make_figures.py, walk_forward.py, splits_walk_forward.py, style_analysis.py, causal_rest.py
 tests/         test_no_leakage.py, test_predict_path.py, test_style.py, test_causal.py, test_models.py
 exercises/     5 implement-it-yourself stubs + tests (see LEARN.md)
 results/       1946-2015 run, results/modern/, results/walk_forward/, results/style/, results/causal/
