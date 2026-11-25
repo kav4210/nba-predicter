@@ -7,3 +7,4 @@ data/modern_games.csv
 models/
 predictions/
 results/modern/test_probs.npz
+paper_log.csv
